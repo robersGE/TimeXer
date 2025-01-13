@@ -3,7 +3,8 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, repeat, einsum
+from einops import rearrange, repeat
+from torch import einsum
 
 from layers.Embed import DataEmbedding
 

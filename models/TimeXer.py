@@ -164,8 +164,8 @@ class Model(nn.Module):
 
         _, _, N = x_enc.shape
 
-        en_embed, n_vars = self.en_embedding(x_enc[:, :, -1].unsqueeze(-1).permute(0, 2, 1))
-        ex_embed = self.ex_embedding(x_enc[:, :, :-1], x_mark_enc)
+        en_embed, n_vars = self.en_embedding(x_enc[:, :, -1].unsqueeze(-1).permute(0, 2, 1)) # pass target only for embedding
+        ex_embed = self.ex_embedding(x_enc[:, :, :-1], x_mark_enc) # pass other variables for embedding, with time information
 
         enc_out = self.encoder(en_embed, ex_embed)
         enc_out = torch.reshape(

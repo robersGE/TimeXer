@@ -35,6 +35,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
     def _select_criterion(self):
         criterion = nn.MSELoss()
         return criterion
+    
+    def count_parameters(self, model):
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Total trainable parameters: {total_params}")
+        return total_params
 
     def vali(self, vali_data, vali_loader, criterion):
         total_loss = []
@@ -77,6 +82,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return total_loss
 
     def train(self, setting):
+        print('Start Training...')
+        n_params = self.count_parameters(self.model)
+        print(f"Total trainable parameters: {n_params}")
+        
         train_data, train_loader = self._get_data(flag='train')
         vali_data, vali_loader = self._get_data(flag='val')
         test_data, test_loader = self._get_data(flag='test')
@@ -85,7 +94,6 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         if not os.path.exists(path):
             os.makedirs(path)
 
-        time_now = time.time()
 
         train_steps = len(train_loader)
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
@@ -95,14 +103,34 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
+            
+        # Initialize starting epoch and iteration
+        start_epoch = 0
+        start_iteration = 0
 
-        for epoch in range(self.args.train_epochs):
+        # Try to load a full checkpoint if available
+        try:
+            checkpoint = torch.load(os.path.join(path, 'checkpoint_iter.pth'))
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            model_optim.load_state_dict(checkpoint['optimizer_state_dict'])
+            start_epoch = checkpoint['epoch']
+            start_iteration = checkpoint['iteration']
+            print(f"Resuming from epoch {start_epoch}, iteration {start_iteration}")
+        except:
+            print("No iteration checkpoint found, starting training from scratch")
+        
+        time_now = time.time()
+
+        # Loop over epochs
+        for epoch in range(start_epoch, self.args.train_epochs):
             iter_count = 0
             train_loss = []
 
             self.model.train()
             epoch_time = time.time()
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
+                if epoch == start_epoch and i < start_iteration:
+                    continue  # Skip already completed iterations
                 iter_count += 1
                 model_optim.zero_grad()
                 batch_x = batch_x.float().to(self.device)
@@ -140,13 +168,22 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     loss = criterion(outputs, batch_y)
                     train_loss.append(loss.item())
 
-                if (i + 1) % 100 == 0:
+                if (i + 1) % 10 == 0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
                     speed = (time.time() - time_now) / iter_count
                     left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
                     print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
-                    iter_count = 0
-                    time_now = time.time()
+                    
+                    # Save full checkpoint
+                    checkpoint_path = os.path.join(path, f'checkpoint_iter.pth')
+                    torch.save({
+                        'model_state_dict': self.model.state_dict(),
+                        'optimizer_state_dict': model_optim.state_dict(),
+                        'epoch': epoch,
+                        'iteration': i + 1,
+                        'args': vars(self.args),  # Optional metadata
+                    }, checkpoint_path)
+                    print(f"Checkpoint saved at iteration {i + 1}")
 
                 if self.args.use_amp:
                     scaler.scale(loss).backward()
