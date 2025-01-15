@@ -123,6 +123,7 @@ class Model(nn.Module):
         self.patch_len = configs.patch_len
         self.patch_num = int(configs.seq_len // configs.patch_len)
         self.n_vars = 1 if configs.features == 'MS' else configs.enc_in
+        self.boolean_indices = []
         # Embedding
         self.en_embedding = EnEmbedding(self.n_vars, configs.d_model, self.patch_len, configs.dropout)
 
@@ -153,33 +154,52 @@ class Model(nn.Module):
         self.head_nf = configs.d_model * (self.patch_num + 1)
         self.head = FlattenHead(configs.enc_in, self.head_nf, configs.pred_len,
                                 head_dropout=configs.dropout)
-
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
+        # Separate boolean and non-boolean indices
+        bool_indices = self.boolean_indices  # Precomputed list of boolean column indices
+        non_bool_indices = [i for i in range(x_enc.shape[-1]) if i not in bool_indices]
+
         if self.use_norm:
-            # Normalization from Non-stationary Transformer
-            means = x_enc.mean(1, keepdim=True).detach()
-            x_enc = x_enc - means
-            stdev = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
-            x_enc /= stdev
+            # Separate non-boolean and boolean data
+            x_enc_non_bool = x_enc[:, :, non_bool_indices]
+            x_enc_bool = x_enc[:, :, bool_indices]
+
+            # Normalization for non-boolean data
+            means = x_enc_non_bool.mean(1, keepdim=True).detach()
+            x_enc_non_bool = x_enc_non_bool - means
+            stdev = torch.sqrt(torch.var(x_enc_non_bool, dim=1, keepdim=True, unbiased=False) + 1e-5)
+            x_enc_non_bool /= stdev
+
+            # Create an empty tensor to hold the reintegrated data
+            x_enc = torch.zeros_like(torch.cat([x_enc_non_bool, x_enc_bool], dim=-1))
+            
+            # Assign values to the appropriate indices
+            x_enc[:, :, self.boolean_indices] = x_enc_bool  # Place boolean data
+            non_bool_indices = [i for i in range(x_enc.shape[-1]) if i not in self.boolean_indices]
+            x_enc[:, :, non_bool_indices] = x_enc_non_bool  # Place non-boolean data
+
 
         _, _, N = x_enc.shape
 
-        en_embed, n_vars = self.en_embedding(x_enc[:, :, -1].unsqueeze(-1).permute(0, 2, 1)) # pass target only for embedding
-        ex_embed = self.ex_embedding(x_enc[:, :, :-1], x_mark_enc) # pass other variables for embedding, with time information
+        # Pass non-boolean target only for embedding
+        en_embed, n_vars = self.en_embedding(x_enc[:, :, non_bool_indices[-1]].unsqueeze(-1).permute(0, 2, 1))
+        ex_embed = self.ex_embedding(x_enc[:, :, non_bool_indices[:-1]], x_mark_enc)  # Pass other variables for embedding
 
         enc_out = self.encoder(en_embed, ex_embed)
-        enc_out = torch.reshape(
-            enc_out, (-1, n_vars, enc_out.shape[-2], enc_out.shape[-1]))
-        # z: [bs x nvars x d_model x patch_num]
+        enc_out = torch.reshape(enc_out, (-1, n_vars, enc_out.shape[-2], enc_out.shape[-1]))
         enc_out = enc_out.permute(0, 1, 3, 2)
 
         dec_out = self.head(enc_out)  # z: [bs x nvars x target_window]
         dec_out = dec_out.permute(0, 2, 1)
 
         if self.use_norm:
-            # De-Normalization from Non-stationary Transformer
-            dec_out = dec_out * (stdev[:, 0, -1:].unsqueeze(1).repeat(1, self.pred_len, 1))
-            dec_out = dec_out + (means[:, 0, -1:].unsqueeze(1).repeat(1, self.pred_len, 1))
+            # De-Normalization for non-boolean data
+            dec_out_non_bool = dec_out[:, :, :len(non_bool_indices)]
+            dec_out_non_bool = dec_out_non_bool * (stdev[:, :, -1:].unsqueeze(1).repeat(1, self.pred_len, 1))
+            dec_out_non_bool = dec_out_non_bool + (means[:, :, -1:].unsqueeze(1).repeat(1, self.pred_len, 1))
+
+            # Combine de-normalized non-boolean and boolean columns
+            dec_out = torch.cat([dec_out_non_bool, dec_out[:, :, len(non_bool_indices):]], dim=-1)
 
         return dec_out
 

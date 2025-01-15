@@ -13,3 +13,4 @@ tqdm==4.64.1
 jupyter
 sqlalchemy
 pymssql
+openpyxl

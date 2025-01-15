@@ -75,7 +75,8 @@ def data_provider(args, flag):
             target=args.target,
             timeenc=timeenc,
             freq=freq,
-            seasonal_patterns=args.seasonal_patterns
+            seasonal_patterns=args.seasonal_patterns,
+            boolean_cols=args.boolean_cols
         )
         print(flag, len(data_set))
         data_loader = DataLoader(
@@ -84,4 +85,4 @@ def data_provider(args, flag):
             shuffle=shuffle_flag,
             num_workers=args.num_workers,
             drop_last=drop_last)
-        return data_set, data_loader
+        return data_set, data_loader, data_set.boolean_indices 

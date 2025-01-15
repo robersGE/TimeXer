@@ -8,6 +8,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from torch.utils.data._utils.collate import np_str_obj_array_pattern, default_collate_err_msg_format
 
+import argparse
+import ast
+
 plt.switch_backend('agg')
 
 
@@ -180,3 +183,12 @@ class HiddenPrints:
             return
         sys.stdout.close()
         sys.stdout = self._original_stdout
+
+
+def parse_boolean_cols(arg):
+    try:
+        return ast.literal_eval(arg) if arg else []
+    except (ValueError, SyntaxError):
+        raise argparse.ArgumentTypeError(f"Invalid list format: {arg}")
+
+

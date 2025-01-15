@@ -207,7 +207,7 @@ class Dataset_ETT_minute(Dataset):
 class Dataset_Custom(Dataset):
     def __init__(self, args, root_path, flag='train', size=None,
                  features='S', data_path='ETTh1.csv',
-                 target='OT', scale=True, timeenc=0, freq='h', seasonal_patterns=None):
+                 target='OT', scale=True, timeenc=0, freq='h', seasonal_patterns=None, boolean_cols=[]):
         # size [seq_len, label_len, pred_len]
         self.args = args
         # info
@@ -227,6 +227,8 @@ class Dataset_Custom(Dataset):
         self.features = features
         self.target = target
         self.scale = scale
+        self.boolean_cols = boolean_cols
+        self.boolean_indices = []
         self.timeenc = timeenc
         self.freq = freq
 
@@ -261,9 +263,27 @@ class Dataset_Custom(Dataset):
             df_data = df_raw[[self.target]]
 
         if self.scale:
-            train_data = df_data[border1s[0]:border2s[0]]
+            # Ensure self.boolean_cols is not None
+            if self.boolean_cols is None:
+                self.boolean_cols = []
+
+            # Separate boolean and non-boolean columns
+            boolean_data = df_data[self.boolean_cols]
+            non_boolean_cols = [col for col in df_data.columns if col not in self.boolean_cols]
+            train_data = df_data[non_boolean_cols][border1s[0]:border2s[0]]
+
+            # Fit the scaler on the non-boolean columns
             self.scaler.fit(train_data.values)
-            data = self.scaler.transform(df_data.values)
+            
+            # Scale only the non-boolean columns
+            scaled_data = self.scaler.transform(df_data[non_boolean_cols].values)
+            scaled_df = pd.DataFrame(scaled_data, columns=non_boolean_cols, index=df_data.index)
+            
+            # Combine scaled non-boolean columns with boolean columns
+            data = pd.concat([scaled_df, boolean_data], axis=1)[df_data.columns].values
+
+            # Create self.boolean_indices with the indices of boolean columns
+            self.boolean_indices = [df_data.columns.get_loc(col) for col in self.boolean_cols]
         else:
             data = df_data.values
 

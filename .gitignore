@@ -174,3 +174,4 @@ cython_debug/
 #ignore secrets
 cfg/secrets.yaml
 checkpoints/
+*.csv

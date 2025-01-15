@@ -7,6 +7,7 @@ from exp.exp_short_term_forecasting import Exp_Short_Term_Forecast
 from exp.exp_anomaly_detection import Exp_Anomaly_Detection
 from exp.exp_classification import Exp_Classification
 from utils.print_args import print_args
+from utils.tools import parse_boolean_cols
 import random
 import numpy as np
 
@@ -15,6 +16,8 @@ if __name__ == '__main__':
     random.seed(fix_seed)
     torch.manual_seed(fix_seed)
     np.random.seed(fix_seed)
+    
+
 
     parser = argparse.ArgumentParser(description='TimesNet')
 
@@ -84,6 +87,7 @@ if __name__ == '__main__':
                         help='down sampling method, only support avg, max, conv')
     parser.add_argument('--seg_len', type=int, default=48,
                         help='the length of segmen-wise iteration of SegRNN')
+    parser.add_argument('--boolean_cols', type=parse_boolean_cols, default=[], help='bool columns to exclude from normalization')
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=10, help='data loader num workers')
