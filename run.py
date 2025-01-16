@@ -10,14 +10,28 @@ from utils.print_args import print_args
 from utils.tools import parse_boolean_cols
 import random
 import numpy as np
+import json
+import yaml
+
+def merge_config_with_args(args, config_path):
+    # Load the configuration file
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
+
+    # Overwrite args with config values
+    for key, value in config.items():
+        if hasattr(args, key):
+            setattr(args, key, value)
+        else:
+            print(f"Warning: {key} is not a recognized argument and will be ignored.")
+
+    return args
 
 if __name__ == '__main__':
     fix_seed = 2021
     random.seed(fix_seed)
     torch.manual_seed(fix_seed)
     np.random.seed(fix_seed)
-    
-
 
     parser = argparse.ArgumentParser(description='TimesNet')
 
@@ -146,6 +160,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
     # args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
     args.use_gpu = True if torch.cuda.is_available() else False
+    
+    config_path = 'cfg/model_cfg.yaml'  # Replace with your config file path
+    args = merge_config_with_args(args, config_path)
 
     print(torch.cuda.is_available())
 

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from layers.SelfAttention_Family import FullAttention, AttentionLayer
-from layers.Embed import DataEmbedding_inverted, PositionalEmbedding
+from layers.Embed import DataEmbedding_inverted, PositionalEmbedding, BooleanEmbedding
 import numpy as np
 
 
@@ -109,7 +109,26 @@ class EncoderLayer(nn.Module):
         y = self.dropout(self.conv2(y).transpose(-1, 1))
 
         return self.norm3(x + y)
+    
+class LearnableCombination(nn.Module):
+    def __init__(self, d_model_bool, d_model_non_bool, d_model_final):
+        super(LearnableCombination, self).__init__()
+        # Linear layers to project boolean and non-boolean embeddings
+        self.bool_proj = nn.Linear(d_model_bool, d_model_final)
+        self.non_bool_proj = nn.Linear(d_model_non_bool, d_model_final)
 
+    def forward(self, ex_embed_non_bool, ex_embed_bool):
+        """
+        ex_embed_non_bool: [Batch, Time, d_model_non_bool]
+        ex_embed_bool: [Batch, Time, d_model_bool]
+        """
+        # Project each embedding to the same final dimension
+        ex_embed_non_bool_proj = self.non_bool_proj(ex_embed_non_bool)
+        ex_embed_bool_proj = self.bool_proj(ex_embed_bool)
+
+        # Combine embeddings via summation
+        combined_embed = ex_embed_non_bool_proj + ex_embed_bool_proj
+        return combined_embed
 
 class Model(nn.Module):
 
@@ -124,12 +143,20 @@ class Model(nn.Module):
         self.patch_num = int(configs.seq_len // configs.patch_len)
         self.n_vars = 1 if configs.features == 'MS' else configs.enc_in
         self.boolean_indices = []
+        self.non_boolean_indices = []
         # Embedding
         self.en_embedding = EnEmbedding(self.n_vars, configs.d_model, self.patch_len, configs.dropout)
-
-        self.ex_embedding = DataEmbedding_inverted(configs.seq_len, configs.d_model, configs.embed, configs.freq,
+        self.ex_embedding_non_bool = DataEmbedding_inverted(configs.seq_len, configs.d_model, configs.embed, configs.freq,
                                                    configs.dropout)
+        self.ex_embedding_bool = BooleanEmbedding(configs.seq_len, configs.d_model, configs.dropout)
 
+        # Learnable combination of embeddings
+        self.learnable_combination = LearnableCombination(
+            d_model_bool=configs.d_model,
+            d_model_non_bool=configs.d_model,
+            d_model_final=configs.d_model
+        )
+        
         # Encoder-only architecture
         self.encoder = Encoder(
             [
@@ -154,52 +181,45 @@ class Model(nn.Module):
         self.head_nf = configs.d_model * (self.patch_num + 1)
         self.head = FlattenHead(configs.enc_in, self.head_nf, configs.pred_len,
                                 head_dropout=configs.dropout)
-    def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
-        # Separate boolean and non-boolean indices
-        bool_indices = self.boolean_indices  # Precomputed list of boolean column indices
-        non_bool_indices = [i for i in range(x_enc.shape[-1]) if i not in bool_indices]
+    def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec): 
+        self.non_bool_indices = [i for i in range(x_enc.shape[-1]) if i not in self.boolean_indices] #TODO do this more efficiently
 
+        # Separate boolean and non-boolean features
+        x_enc_non_bool = x_enc[:, :, self.non_bool_indices]  # Non-boolean features
+        x_enc_bool = x_enc[:, :, self.boolean_indices]  # Boolean features
+    
+        # Normalize non-boolean data if self.use_norm is True
         if self.use_norm:
-            # Separate non-boolean and boolean data
-            x_enc_non_bool = x_enc[:, :, non_bool_indices]
-            x_enc_bool = x_enc[:, :, bool_indices]
-
-            # Normalization for non-boolean data
             means = x_enc_non_bool.mean(1, keepdim=True).detach()
-            x_enc_non_bool = x_enc_non_bool - means
             stdev = torch.sqrt(torch.var(x_enc_non_bool, dim=1, keepdim=True, unbiased=False) + 1e-5)
-            x_enc_non_bool /= stdev
-
-            # Create an empty tensor to hold the reintegrated data
-            x_enc = torch.zeros_like(torch.cat([x_enc_non_bool, x_enc_bool], dim=-1))
+            x_enc_non_bool = (x_enc_non_bool - means) / stdev
+        else:
+            means = stdev = None
             
-            # Assign values to the appropriate indices
-            x_enc[:, :, self.boolean_indices] = x_enc_bool  # Place boolean data
-            non_bool_indices = [i for i in range(x_enc.shape[-1]) if i not in self.boolean_indices]
-            x_enc[:, :, non_bool_indices] = x_enc_non_bool  # Place non-boolean data
-
-
-        _, _, N = x_enc.shape
-
-        # Pass non-boolean target only for embedding
-        en_embed, n_vars = self.en_embedding(x_enc[:, :, non_bool_indices[-1]].unsqueeze(-1).permute(0, 2, 1))
-        ex_embed = self.ex_embedding(x_enc[:, :, non_bool_indices[:-1]], x_mark_enc)  # Pass other variables for embedding
-
+        # Embeddings
+        en_embed, n_vars = self.en_embedding(x_enc_non_bool[:, :, -1].unsqueeze(-1).permute(0, 2, 1))  # Target embedding
+        ex_embed_non_bool = self.ex_embedding_non_bool(x_enc_non_bool, x_mark_enc)  # Non-boolean embedding
+        ex_embed_bool = self.ex_embedding_bool(x_enc_bool)  # Boolean embedding
+            
+        # Learnable combination of boolean and non-boolean embeddings
+        # ex_embed = self.learnable_combination(ex_embed_non_bool, ex_embed_bool)
+        
+        # concat non-boolean and boolean embeddings
+        ex_embed = torch.cat([ex_embed_non_bool, ex_embed_bool], dim=1)
+        # Pass through encoder
         enc_out = self.encoder(en_embed, ex_embed)
+        
         enc_out = torch.reshape(enc_out, (-1, n_vars, enc_out.shape[-2], enc_out.shape[-1]))
+        # z: [bs x nvars x d_model x patch_num]
         enc_out = enc_out.permute(0, 1, 3, 2)
 
         dec_out = self.head(enc_out)  # z: [bs x nvars x target_window]
         dec_out = dec_out.permute(0, 2, 1)
 
         if self.use_norm:
-            # De-Normalization for non-boolean data
-            dec_out_non_bool = dec_out[:, :, :len(non_bool_indices)]
-            dec_out_non_bool = dec_out_non_bool * (stdev[:, :, -1:].unsqueeze(1).repeat(1, self.pred_len, 1))
-            dec_out_non_bool = dec_out_non_bool + (means[:, :, -1:].unsqueeze(1).repeat(1, self.pred_len, 1))
-
-            # Combine de-normalized non-boolean and boolean columns
-            dec_out = torch.cat([dec_out_non_bool, dec_out[:, :, len(non_bool_indices):]], dim=-1)
+            # De-Normalization from Non-stationary Transformer
+            dec_out = dec_out * (stdev[:, 0, -1:].unsqueeze(1).repeat(1, self.pred_len, 1))
+            dec_out = dec_out + (means[:, 0, -1:].unsqueeze(1).repeat(1, self.pred_len, 1))
 
         return dec_out
 

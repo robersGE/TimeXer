@@ -141,7 +141,24 @@ class DataEmbedding_inverted(nn.Module):
             x = self.value_embedding(torch.cat([x, x_mark.permute(0, 2, 1)], 1))
         # x: [Batch Variate d_model]
         return self.dropout(x)
+    
+class BooleanEmbedding(nn.Module):
+    def __init__(self, c_in, d_model, dropout=0.1):
+        super(BooleanEmbedding, self).__init__()
+        self.value_embedding = nn.Linear(c_in, d_model)
+        self.dropout = nn.Dropout(p=dropout)
 
+    def forward(self, x):
+        """
+        x: [Batch, Time, Variate] - Boolean input data
+        """
+        if torch.isnan(x).any():
+            raise ValueError("Input tensor contains NaN values. Please check your data.")
+    
+        x = x.permute(0, 2, 1)  # Convert to [Batch, Variate, Time]
+        print(x.shape)
+        x = self.value_embedding(x)  # Apply linear transformation
+        return self.dropout(x)
 
 class DataEmbedding_wo_pos(nn.Module):
     def __init__(self, c_in, d_model, embed_type='fixed', freq='h', dropout=0.1):

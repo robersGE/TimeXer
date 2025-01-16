@@ -1,0 +1,31 @@
+is_training: 1
+task_name: long_term_forecast
+root_path: ./dataset/custom/
+data_path: test.csv
+model_id: NP_168_24
+model: TimeXer
+data: custom
+features: MS
+seq_len: 168
+pred_len: 96
+e_layers: 3
+enc_in: 3
+dec_in: 3
+c_out: 1
+des: Debugging
+patch_len: 16
+d_model: 512
+d_ff: 512
+batch_size: 4
+itr: 1
+freq: 15min
+target: Bilan
+boolean_cols:
+  - 'FR: Sa'
+  - 'FR: SoF'
+  - 'FR: Brückentag'
+  - 'FR: Feiertag'
+  - 'FR: Ferien-Shopping'
+  - 'FR: Ferien-Firmen'
+  - 'Sommerzeit'
+  - 'Tage vom 21.Juni'
