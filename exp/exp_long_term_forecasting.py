@@ -40,6 +40,20 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Total trainable parameters: {total_params}")
         return total_params
+    
+    def import_comet(self, setting):
+        from comet_ml import start
+        from comet_ml.integration.pytorch import log_model
+
+        experiment = start(
+            api_key="yd3wr0dMPNVn8DIxIINkMbgIi",
+            project_name="timexer",
+            workspace="robersge"
+        )
+        experiment.log_parameters(vars(self.args))  # Log hyperparameters
+        experiment.set_name(setting)  # Optional: name the experiment
+
+        return experiment
 
     def vali(self, vali_data, vali_loader, criterion):
         total_loss = []
@@ -83,6 +97,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
     def train(self, setting):
         print('Start Training...')
+        
+        if self.args.log_to_comet: 
+            experiment = self.import_comet(setting)
+            
         n_params = self.count_parameters(self.model)
         print(f"Total trainable parameters: {n_params}")
         
@@ -167,6 +185,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                     loss = criterion(outputs, batch_y)
                     train_loss.append(loss.item())
+                
+                if self.args.log_to_comet: experiment.log_metric("train_loss", loss.item(), step=epoch * train_steps + i)
 
                 if (i + 1) % 10 == 0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
@@ -174,6 +194,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
                     print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
                     
+
                     # Save full checkpoint
                     checkpoint_path = os.path.join(path, f'checkpoint_iter.pth')
                     torch.save({
@@ -197,6 +218,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             train_loss = np.average(train_loss)
             vali_loss = self.vali(vali_data, vali_loader, criterion)
             test_loss = self.vali(test_data, test_loader, criterion)
+            
+            experiment.log_metric("epoch_train_loss", train_loss, step=epoch)
+            experiment.log_metric("epoch_vali_loss", vali_loss, step=epoch)
+            experiment.log_metric("epoch_test_loss", test_loss, step=epoch)
 
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
                 epoch + 1, train_steps, train_loss, vali_loss, test_loss))
