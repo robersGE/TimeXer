@@ -14,3 +14,4 @@ jupyter
 sqlalchemy
 pymssql
 openpyxl
+comet_ml

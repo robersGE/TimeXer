@@ -156,6 +156,9 @@ if __name__ == '__main__':
 
     # TimeXer
     parser.add_argument('--patch_len', type=int, default=16, help='patch length')
+    
+    # Logging to comet ml
+    parser.add_argument('--log_to_comet', type=bool, help='log to comet ml', default=False)
 
     args = parser.parse_args()
     # args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
