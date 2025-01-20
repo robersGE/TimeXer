@@ -200,7 +200,7 @@ class Model(nn.Module):
         en_embed, n_vars = self.en_embedding(x_enc_non_bool[:, :, -1].unsqueeze(-1).permute(0, 2, 1))  # Target embedding
         ex_embed_non_bool = self.ex_embedding_non_bool(x_enc_non_bool, x_mark_enc)  # Non-boolean embedding
         ex_embed_bool = self.ex_embedding_bool(x_enc_bool)  # Boolean embedding
-            
+
         # Learnable combination of boolean and non-boolean embeddings
         # ex_embed = self.learnable_combination(ex_embed_non_bool, ex_embed_bool)
         
