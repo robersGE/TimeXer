@@ -1,0 +1,13 @@
+n_years: 1
+n_days: 365
+start_date: '2023-01-01'
+noise: 0.0
+scales_radiation: 0.8 # goes from 1-scales_radiation to 1.
+base_load: 500
+bool_day_transition: 16
+week_end_start_start_transition: 12
+week_end_start_end_transition: 24
+week_end_end_start_transition: 12
+week_end_end_end_transition: 24
+smooth_window: 16
+drop_bool_day: True

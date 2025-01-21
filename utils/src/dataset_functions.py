@@ -99,7 +99,7 @@ def adjust_weekend_load(load, timestamps, fr_st = 20, fr_en = 22, su_st = 21, su
     
     return load * adjustment
 
-def adjust_bool_day(load, timestamps, daily_scales, transition_len=20, max_scale=0.4):
+def adjust_bool_day(load, daily_scales, transition_len=20, max_scale=0.4, threshold=0.2):
     """
     Adjusts load based on boolean daily scales and identifies transitions.
 
@@ -113,7 +113,7 @@ def adjust_bool_day(load, timestamps, daily_scales, transition_len=20, max_scale
     - Series indicating the upward and downward transitions.
     """
     # Determine boolean scales based on daily scales threshold
-    bool_scales = daily_scales > 0.5
+    bool_scales = daily_scales > threshold
 
     # Identify upward transitions
     changes_up = (bool_scales != bool_scales.shift(1)) & (bool_scales == 1)
@@ -139,8 +139,8 @@ def adjust_bool_day(load, timestamps, daily_scales, transition_len=20, max_scale
     changes_up_idxs = np.where(changes_up)[0]
     changes_down_idxs = np.where(changes_down)[0]
     
-    print(f"Upward transitions: {n_changes_up}, downward transitions: {n_changes_down}")
-    print(f"Upward transitions: {changes_up_idxs}, downward transitions: {changes_down_idxs}")
+    # print(f"Upward transitions: {n_changes_up}, downward transitions: {n_changes_down}")
+    # print(f"Upward transitions: {changes_up_idxs}, downward transitions: {changes_down_idxs}")
     
     for i in range(n_changes_up):
         bool_scales[changes_up_idxs[i]-transition_len//2:changes_up_idxs[i]+transition_len//2] = smoothstep(np.arange(transition_len), 0, transition_len, 4)
@@ -151,7 +151,7 @@ def adjust_bool_day(load, timestamps, daily_scales, transition_len=20, max_scale
     bool_scales = (bool_scales)*max_scale + (1-max_scale)
     
     load = load * bool_scales
-    return load
+    return load, bool_scales, daily_scales > threshold
 
     
 
@@ -164,7 +164,7 @@ def create_daily_scales(time, noise_lvl=0.5):
     start_date = t_df['time'].iloc[0]
     end_date = t_df['time'].iloc[-1]
     
-    print(start_date, end_date)
+    # print(start_date, end_date)
 
     # Generate a date range covering all days in the DataFrame
     all_days = pd.date_range(start=start_date, end=end_date, freq='D')
@@ -207,12 +207,20 @@ def smoothen(df, column, rolling_window=5):
     Returns:
     - DataFrame with the specified column smoothened.
     """
+    
     # Ensure 'time' column is datetime and set it as the index
     df['time'] = pd.to_datetime(df['time'])
+    
+    # Set 'time' column as the index
     df = df.set_index('time')
+    
+    df[column] = pd.to_numeric(df[column], errors='coerce')
 
     # Resample to 15-minute frequency and take the mean
     df = df.resample('15min').mean()
+    
+    # Interpolate missing values
+    df[column] = df[column].interpolate(method='time')
 
     # Apply a moving average to smooth the data
     df[column] = df[column].rolling(window=rolling_window, min_periods=1).mean()
@@ -224,6 +232,7 @@ def smoothen(df, column, rolling_window=5):
     df = df.reset_index()
 
     return df
+
 
 def generate_temperature_profile(time, noise=1.0, daily_scales = None):
     """
@@ -250,8 +259,26 @@ def generate_temperature_profile(time, noise=1.0, daily_scales = None):
 
     # Combine effects
     temperature = seasonal_effect + daily_effect + random_noise
-
-
-        
-
+    
     return temperature
+
+def export_to_csv(df, file_path):
+    """
+    Exports the DataFrame to a CSV file, ensuring the 'time' column is at the end and properly formatted.
+
+    Parameters:
+    - df: Pandas DataFrame to export.
+    - file_path: File path for the output CSV file.
+
+    Returns:
+    - None
+    """
+    # Ensure 'time' column is at the end
+    df = df[[col for col in df.columns if col != 'time'] + ['time']]
+
+    # Convert 'time' column to the desired format
+    if 'time' in df.columns:
+        df['time'] = pd.to_datetime(df['time']).dt.strftime('%Y/%m/%d %H:%M')
+
+    # Export to CSV
+    df.to_csv(file_path, index=False)
