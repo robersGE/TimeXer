@@ -39,6 +39,27 @@
           "patch_len": "16"
         },
         // "justMyCode": true
+      },
+      {
+        "name": "Easy Model",
+        "type": "python",
+        "request": "launch",
+        "program": "${workspaceFolder}/run.py",
+        "args": [
+          "--is_training", "1",
+          "--task_name", "long_term_forecast",
+          "--model_id", "NP_168_24",
+          "--model", "TimeXer",
+          "--data", "custom",
+          "--config_path", "./cfg/simple_model.yaml",
+        ],
+        "console": "integratedTerminal",
+        "env": {
+          "model_name": "TimeXer",
+          "des": "Debugging",
+          "patch_len": "16"
+        },
+        // "justMyCode": true
       }
     ]
   }

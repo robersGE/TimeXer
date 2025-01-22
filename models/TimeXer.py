@@ -20,6 +20,32 @@ class FlattenHead(nn.Module):
         x = self.dropout(x)
         return x
 
+class SimpleHead(nn.Module):
+    def __init__(self, d_model, target_window, head_dropout=0):
+        """
+        A simpler version of FlattenHead that directly applies a linear transformation 
+        to reduce dimensionality without explicit flattening.
+        Args:
+            d_model (int): Dimension of the model.
+            target_window (int): Prediction window size.
+            head_dropout (float): Dropout rate for regularization.
+        """
+        super(SimpleHead, self).__init__()
+        self.projection = nn.Linear(d_model, target_window)
+        self.dropout = nn.Dropout(head_dropout)
+
+    def forward(self, x):  # x: [bs, nvars, patch_num, d_model]
+        """
+        Args:
+            x (Tensor): Input tensor of shape [Batch, Variables, Patch, Features].
+        Returns:
+            Tensor: Output tensor of shape [Batch, Variables, Target_Window].
+        """
+        # Apply the projection along the feature dimension
+        x = self.projection(x)  # [bs, nvars, patch_num, target_window]
+        x = self.dropout(x)  # Add dropout
+        return x.mean(dim=2)  # Aggregate over patches: [bs, nvars, target_window]
+
 
 class EnEmbedding(nn.Module):
     def __init__(self, n_vars, d_model, patch_len, dropout):
@@ -65,7 +91,159 @@ class Encoder(nn.Module):
         if self.projection is not None:
             x = self.projection(x)
         return x
+    
+class ConfigurableEncoderLayer(nn.Module):
+    def __init__(self, use_attention, use_cross, self_attention, cross_attention, d_model, d_ff=None,
+                 dropout=0.1, activation="relu"):
+        """
+        Configurable Encoder Layer that uses attention-based or linear transformations
+        and keeps convolutional layers for local feature extraction.
+        Args:
+            use_attention (bool): Whether to use attention mechanisms.
+            self_attention: Self-attention module.
+            cross_attention: Cross-attention module.
+            d_model (int): Dimension of the input embeddings.
+            d_ff (int): Dimension of the feedforward network. Defaults to 4 * d_model.
+            dropout (float): Dropout rate for regularization.
+            activation (str): Activation function ('relu' or 'gelu').
+        """
+        super(ConfigurableEncoderLayer, self).__init__()
+        self.use_attention = use_attention
+        self.use_cross = use_cross
 
+        d_ff = d_ff or 4 * d_model
+
+        if self.use_attention:
+            # Attention-based components
+            self.self_attention = self_attention
+            if self.use_cross:
+                self.cross_attention = cross_attention
+        else:
+            # Small linear transformations
+            self.linear1_1 = nn.Linear(d_model, d_ff)
+            self.linear1_2 = nn.Linear(d_model, d_ff)
+            self.linear2 = nn.Linear(d_ff*2, d_model)
+
+        # Convolutional layers
+        self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
+        self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
+
+        # Normalization layers
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+
+        # Dropout for regularization
+        self.dropout = nn.Dropout(dropout)
+
+        # Activation function
+        self.activation = F.relu if activation == "relu" else F.gelu
+
+    def forward(self, x, cross, x_mask=None, cross_mask=None, tau=None, delta=None):
+        """
+        Forward pass through the encoder layer.
+        Args:
+            x (Tensor): Input tensor of shape [Batch, Time, Features].
+            cross (Tensor): Cross-attention input tensor.
+            x_mask: Self-attention mask (if applicable).
+            cross_mask: Cross-attention mask (if applicable).
+        Returns:
+            Tensor: Processed output tensor.
+        """
+        if self.use_attention:
+            B, L, D = cross.shape
+
+            # Self-attention block
+            x = x + self.dropout(self.self_attention(
+                x, x, x,
+                attn_mask=x_mask,
+                tau=tau, delta=None
+            )[0])
+            x = self.norm1(x)
+
+            if self.use_cross:
+                x_glb_ori = x[:, -1, :].unsqueeze(1)
+                x_glb = torch.reshape(x_glb_ori, (B, -1, D))
+                x_glb_attn = self.dropout(self.cross_attention(
+                    x_glb, cross, cross,
+                    attn_mask=cross_mask,
+                    tau=tau, delta=delta
+                )[0])
+                x_glb_attn = torch.reshape(x_glb_attn,
+                                        (x_glb_attn.shape[0] * x_glb_attn.shape[1], x_glb_attn.shape[2])).unsqueeze(1)
+                x_glb = x_glb_ori + x_glb_attn
+                x_glb = self.norm2(x_glb)
+
+                y = x = torch.cat([x[:, :-1, :], x_glb], dim=1)
+            else: 
+                y = x = x[:, :-1, :]
+        else:
+            # Linear transformation block
+            y = self.dropout(self.activation(self.linear1_1(x)))
+
+            # Integrate `cross` tensor in the linear path
+            cross_transformed = self.dropout(self.activation(self.linear1_2(cross)))  # Transform cross
+            print(f'cross shape: {cross_transformed.shape}')
+            print(f'y shape: {y.shape}')
+            print(f'x shape: {x.shape}')
+            
+            y = torch.cat([y, cross_transformed], dim=1)
+
+            y = self.dropout(self.linear2(y))
+            x = self.norm1(x + y)
+
+        # Convolutional block (shared for both configurations)
+        y = self.dropout(self.activation(self.conv1(x.transpose(-1, 1))))  # [Batch, Features, Time]
+        y = self.dropout(self.conv2(y)).transpose(-1, 1)  # Back to [Batch, Time, Features]
+
+        return self.norm3(x + y)
+
+class ConfigurableEncoder(nn.Module):
+    def __init__(self, configs):
+        """
+        Configurable Encoder with support for attention-based or linear-based layers.
+        Args:
+            use_attention (bool): Whether to use attention mechanisms.
+            d_model (int): Dimension of the input embeddings.
+            d_ff (int): Dimension of the feedforward network.
+            n_layers (int): Number of encoder layers.
+            dropout (float): Dropout rate for regularization.
+            activation (str): Activation function ('relu' or 'gelu').
+        """
+        super(ConfigurableEncoder, self).__init__()
+        self.layers = nn.ModuleList([
+            ConfigurableEncoderLayer(
+                use_attention=configs.use_attention,
+                use_cross=configs.use_cross,
+                self_attention=AttentionLayer(
+                        FullAttention(False, configs.factor, attention_dropout=configs.dropout,
+                                      output_attention=False),
+                        configs.d_model, configs.n_heads) if configs.use_attention else None,
+                cross_attention=AttentionLayer(
+                        FullAttention(False, configs.factor, attention_dropout=configs.dropout,
+                                      output_attention=False),
+                        configs.d_model, configs.n_heads) if configs.use_attention else None,
+                d_model=configs.d_model,
+                d_ff=configs.d_ff,
+                dropout=configs.dropout,
+                activation=configs.activation
+            )
+            for _ in range(configs.e_layers)
+        ])
+        self.norm = nn.LayerNorm(configs.d_model)
+
+    def forward(self, x, cross, x_mask=None, cross_mask=None, tau=None, delta=None):
+        """
+        Forward pass through the encoder.
+        Args:
+            x (Tensor): Input tensor of shape [Batch, Time, Features].
+            cross (Tensor): Cross-attention input tensor.
+        Returns:
+            Tensor: Processed output tensor.
+        """
+        for layer in self.layers:
+            x = layer(x, cross, x_mask, cross_mask, tau, delta)
+        return self.norm(x)
 
 class EncoderLayer(nn.Module):
     def __init__(self, self_attention, cross_attention, d_model, d_ff=None,
@@ -109,6 +287,7 @@ class EncoderLayer(nn.Module):
         y = self.dropout(self.conv2(y).transpose(-1, 1))
 
         return self.norm3(x + y)
+
     
 class LearnableCombination(nn.Module):
     def __init__(self, d_model_bool, d_model_non_bool, d_model_final):
@@ -142,51 +321,67 @@ class Model(nn.Module):
         self.patch_len = configs.patch_len
         self.patch_num = int(configs.seq_len // configs.patch_len)
         self.n_vars = 1 if configs.features == 'MS' else configs.enc_in
-        self.boolean_indices = []
-        self.non_boolean_indices = []
+
+        self.use_boolean = configs.use_boolean
+        if self.use_boolean:
+            self.boolean_indices = []
+            self.non_boolean_indices = []
+            
+        self.use_learnable_combination = configs.use_learnable_combination
+        self.use_flatten_head = configs.use_flatten_head
+            
         # Embedding
         self.en_embedding = EnEmbedding(self.n_vars, configs.d_model, self.patch_len, configs.dropout)
         self.ex_embedding_non_bool = DataEmbedding_inverted(configs.seq_len, configs.d_model, configs.embed, configs.freq,
                                                    configs.dropout)
-        self.ex_embedding_bool = BooleanEmbedding(configs.seq_len, configs.d_model, configs.dropout)
+        if self.use_boolean:
+            self.ex_embedding_bool = BooleanEmbedding(configs.seq_len, configs.d_model, configs.dropout)
 
-        # Learnable combination of embeddings
-        self.learnable_combination = LearnableCombination(
-            d_model_bool=configs.d_model,
-            d_model_non_bool=configs.d_model,
-            d_model_final=configs.d_model
-        )
+        if self.use_learnable_combination:
+            # Learnable combination of embeddings
+            self.learnable_combination = LearnableCombination(
+                d_model_bool=configs.d_model,
+                d_model_non_bool=configs.d_model,
+                d_model_final=configs.d_model
+            )
         
         # Encoder-only architecture
-        self.encoder = Encoder(
-            [
-                EncoderLayer(
-                    AttentionLayer(
-                        FullAttention(False, configs.factor, attention_dropout=configs.dropout,
-                                      output_attention=False),
-                        configs.d_model, configs.n_heads),
-                    AttentionLayer(
-                        FullAttention(False, configs.factor, attention_dropout=configs.dropout,
-                                      output_attention=False),
-                        configs.d_model, configs.n_heads),
-                    configs.d_model,
-                    configs.d_ff,
-                    dropout=configs.dropout,
-                    activation=configs.activation,
-                )
-                for l in range(configs.e_layers)
-            ],
-            norm_layer=torch.nn.LayerNorm(configs.d_model)
-        )
+        self.encoder = ConfigurableEncoder(configs=configs)
         self.head_nf = configs.d_model * (self.patch_num + 1)
-        self.head = FlattenHead(configs.enc_in, self.head_nf, configs.pred_len,
+        if self.use_flatten_head:
+            self.head = FlattenHead(configs.enc_in, self.head_nf, configs.pred_len,
                                 head_dropout=configs.dropout)
+        else:
+            self.head = SimpleHead(configs.d_model, configs.pred_len, configs.dropout)
+        
+        self.initialize_weights()
+        
+    def initialize_weights(self):
+        """
+        Initialize the weights of the model using recommended methods.
+        """
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)  # Xavier initialization for linear layers
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)  # Initialize biases to 0
+            elif isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')  # Kaiming for Conv1d layers
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)  # Initialize biases to 0
+            elif isinstance(m, nn.LayerNorm):
+                nn.init.constant_(m.bias, 0)  # Set LayerNorm bias to 0
+                nn.init.constant_(m.weight, 1.0)  # Set LayerNorm weight to 1.0
+
+            
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec): 
+        if self.use_boolean:
+            x_enc_bool = x_enc[:, :, self.boolean_indices]  # Boolean features
+
         self.non_bool_indices = [i for i in range(x_enc.shape[-1]) if i not in self.boolean_indices] #TODO do this more efficiently
 
         # Separate boolean and non-boolean features
         x_enc_non_bool = x_enc[:, :, self.non_bool_indices]  # Non-boolean features
-        x_enc_bool = x_enc[:, :, self.boolean_indices]  # Boolean features
     
         # Normalize non-boolean data if self.use_norm is True
         if self.use_norm:
@@ -199,13 +394,19 @@ class Model(nn.Module):
         # Embeddings
         en_embed, n_vars = self.en_embedding(x_enc_non_bool[:, :, -1].unsqueeze(-1).permute(0, 2, 1))  # Target embedding
         ex_embed_non_bool = self.ex_embedding_non_bool(x_enc_non_bool, x_mark_enc)  # Non-boolean embedding
-        ex_embed_bool = self.ex_embedding_bool(x_enc_bool)  # Boolean embedding
 
-        # Learnable combination of boolean and non-boolean embeddings
-        # ex_embed = self.learnable_combination(ex_embed_non_bool, ex_embed_bool)
-        
-        # concat non-boolean and boolean embeddings
-        ex_embed = torch.cat([ex_embed_non_bool, ex_embed_bool], dim=1)
+        if self.use_boolean:
+            ex_embed_bool = self.ex_embedding_bool(x_enc_bool)  # Boolean embedding
+
+            if self.use_learnable_combination:
+                # Learnable combination of boolean and non-boolean embeddings
+                ex_embed = self.learnable_combination(ex_embed_non_bool, ex_embed_bool)
+            else: 
+                # concat non-boolean and boolean embeddings
+                ex_embed = torch.cat([ex_embed_non_bool, ex_embed_bool], dim=1)
+        else:
+            ex_embed = ex_embed_non_bool
+            
         # Pass through encoder
         enc_out = self.encoder(en_embed, ex_embed)
         
@@ -224,6 +425,17 @@ class Model(nn.Module):
         return dec_out
 
 
+    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
+        if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
+            if self.features == 'M':
+                dec_out = self.forecast_multi(x_enc, x_mark_enc, x_dec, x_mark_dec)
+                return dec_out[:, -self.pred_len:, :]  # [B, L, D]
+            else:
+                dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
+                return dec_out[:, -self.pred_len:, :]  # [B, L, D]
+        else:
+            return None
+        
     def forecast_multi(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
         if self.use_norm:
             # Normalization from Non-stationary Transformer
@@ -252,14 +464,3 @@ class Model(nn.Module):
             dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
 
         return dec_out
-
-    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
-        if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
-            if self.features == 'M':
-                dec_out = self.forecast_multi(x_enc, x_mark_enc, x_dec, x_mark_dec)
-                return dec_out[:, -self.pred_len:, :]  # [B, L, D]
-            else:
-                dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
-                return dec_out[:, -self.pred_len:, :]  # [B, L, D]
-        else:
-            return None

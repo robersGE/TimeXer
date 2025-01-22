@@ -160,11 +160,22 @@ if __name__ == '__main__':
     # Logging to comet ml
     parser.add_argument('--log_to_comet', type=bool, help='log to comet ml', default=False)
 
+    # Model simplification 
+    
+    parser.add_argument('--use_boolean', type=bool, help='use boolean embeddings', default=True)
+    parser.add_argument('--use_learnable_combination', type=bool, help='use learnable combination', default=True)
+    parser.add_argument('--use_flatten_head', type=bool, help='use flatten head', default=True)
+    parser.add_argument('--use_attention', type=bool, help='use attention', default=True)
+    parser.add_argument('--use_cross', type=bool, help='use cross', default=True)
+    
+    # add config
+    parser.add_argument('--config_path', type=str, help='config path')
+    
     args = parser.parse_args()
     # args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
     args.use_gpu = True if torch.cuda.is_available() else False
     
-    config_path = 'cfg/model_cfg.yaml'  # Replace with your config file path
+    config_path = args.config_path
     args = merge_config_with_args(args, config_path)
 
     print(torch.cuda.is_available())

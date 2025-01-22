@@ -115,7 +115,6 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         if not os.path.exists(path):
             os.makedirs(path)
 
-
         train_steps = len(train_loader)
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
