@@ -93,7 +93,7 @@ class Encoder(nn.Module):
         return x
     
 class ConfigurableEncoderLayer(nn.Module):
-    def __init__(self, use_attention, use_cross, self_attention, cross_attention, d_model, d_ff=None,
+    def __init__(self, use_attention, use_cross, self_attention, cross_attention, d_model, d_cross, d_ff=None,
                  dropout=0.1, activation="relu"):
         """
         Configurable Encoder Layer that uses attention-based or linear transformations
@@ -122,7 +122,8 @@ class ConfigurableEncoderLayer(nn.Module):
             # Small linear transformations
             self.linear1_1 = nn.Linear(d_model, d_ff)
             self.linear1_2 = nn.Linear(d_model, d_ff)
-            self.linear2 = nn.Linear(d_ff*2, d_model)
+            self.linear2 = nn.Linear(d_ff, d_model)
+            self.linear_y = nn.Linear(d_cross, 2)
 
         # Convolutional layers
         self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
@@ -184,12 +185,19 @@ class ConfigurableEncoderLayer(nn.Module):
             # Integrate `cross` tensor in the linear path
             cross_transformed = self.dropout(self.activation(self.linear1_2(cross)))  # Transform cross
             print(f'cross shape: {cross_transformed.shape}')
-            print(f'y shape: {y.shape}')
             print(f'x shape: {x.shape}')
             
             y = torch.cat([y, cross_transformed], dim=1)
 
             y = self.dropout(self.linear2(y))
+            
+            print(f'y shape: {y.shape}')
+            y = y.transpose(1, 2)
+            
+            y = self.linear_y(y)
+            y = y.transpose(1, 2)
+            print(f'y shape: {y.shape}')
+
             x = self.norm1(x + y)
 
         # Convolutional block (shared for both configurations)
@@ -199,7 +207,7 @@ class ConfigurableEncoderLayer(nn.Module):
         return self.norm3(x + y)
 
 class ConfigurableEncoder(nn.Module):
-    def __init__(self, configs):
+    def __init__(self, configs, d_cross):
         """
         Configurable Encoder with support for attention-based or linear-based layers.
         Args:
@@ -224,6 +232,7 @@ class ConfigurableEncoder(nn.Module):
                                       output_attention=False),
                         configs.d_model, configs.n_heads) if configs.use_attention else None,
                 d_model=configs.d_model,
+                d_cross=d_cross,
                 d_ff=configs.d_ff,
                 dropout=configs.dropout,
                 activation=configs.activation
@@ -321,6 +330,8 @@ class Model(nn.Module):
         self.patch_len = configs.patch_len
         self.patch_num = int(configs.seq_len // configs.patch_len)
         self.n_vars = 1 if configs.features == 'MS' else configs.enc_in
+        self.boolean_indices = []
+        self.n_stamp_features = 4
 
         self.use_boolean = configs.use_boolean
         if self.use_boolean:
@@ -346,7 +357,7 @@ class Model(nn.Module):
             )
         
         # Encoder-only architecture
-        self.encoder = ConfigurableEncoder(configs=configs)
+        self.encoder = ConfigurableEncoder(configs=configs, d_cross=configs.n_vars_num + configs.n_vars_time_features + 2)
         self.head_nf = configs.d_model * (self.patch_num + 1)
         if self.use_flatten_head:
             self.head = FlattenHead(configs.enc_in, self.head_nf, configs.pred_len,
@@ -355,6 +366,10 @@ class Model(nn.Module):
             self.head = SimpleHead(configs.d_model, configs.pred_len, configs.dropout)
         
         self.initialize_weights()
+        
+    def update_data_infos(self, infos_dict):
+        self.boolean_indices = infos_dict['boolean_indices']
+        self.n_stamp_features = infos_dict['n_stamp_features']
         
     def initialize_weights(self):
         """
@@ -381,7 +396,7 @@ class Model(nn.Module):
         self.non_bool_indices = [i for i in range(x_enc.shape[-1]) if i not in self.boolean_indices] #TODO do this more efficiently
 
         # Separate boolean and non-boolean features
-        x_enc_non_bool = x_enc[:, :, self.non_bool_indices]  # Non-boolean features
+        x_enc_non_bool = x_enc[:, :, self.non_bool_indices]  # Non-boolean features [batch_size, seq_len, num_non_bool_features]
     
         # Normalize non-boolean data if self.use_norm is True
         if self.use_norm:
@@ -392,7 +407,7 @@ class Model(nn.Module):
             means = stdev = None
             
         # Embeddings
-        en_embed, n_vars = self.en_embedding(x_enc_non_bool[:, :, -1].unsqueeze(-1).permute(0, 2, 1))  # Target embedding
+        en_embed, n_vars = self.en_embedding(x_enc_non_bool[:, :, -1].unsqueeze(-1).permute(0, 2, 1))  # Target embedding treated as [batch_size, num_non_bool_features, seq_len], return [batch_size, 1+1, 2*seq_len]
         ex_embed_non_bool = self.ex_embedding_non_bool(x_enc_non_bool, x_mark_enc)  # Non-boolean embedding
 
         if self.use_boolean:

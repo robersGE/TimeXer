@@ -228,6 +228,7 @@ class Dataset_Custom(Dataset):
         self.target = target
         self.scale = scale
         self.boolean_cols = boolean_cols
+        self.infos_dict = {}
         self.boolean_indices = []
         self.timeenc = timeenc
         self.freq = freq
@@ -282,8 +283,7 @@ class Dataset_Custom(Dataset):
             # Combine scaled non-boolean columns with boolean columns
             data = pd.concat([scaled_df, boolean_data], axis=1)[df_data.columns].values
 
-            # Create self.boolean_indices with the indices of boolean columns
-            self.boolean_indices = [df_data.columns.get_loc(col) for col in self.boolean_cols]
+            self.infos_dict['boolean_indices'] = [df_data.columns.get_loc(col) for col in self.boolean_cols]
         else:
             data = df_data.values
 
@@ -305,6 +305,7 @@ class Dataset_Custom(Dataset):
         if self.set_type == 0 and self.args.augmentation_ratio > 0:
             self.data_x, self.data_y, augmentation_tags = run_augmentation_single(self.data_x, self.data_y, self.args)
 
+        self.infos_dict['n_stamp_features'] = data_stamp.shape[1]
         self.data_stamp = data_stamp
 
     def __getitem__(self, index):

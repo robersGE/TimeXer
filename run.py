@@ -102,6 +102,9 @@ if __name__ == '__main__':
     parser.add_argument('--seg_len', type=int, default=48,
                         help='the length of segmen-wise iteration of SegRNN')
     parser.add_argument('--boolean_cols', type=parse_boolean_cols, default=[], help='bool columns to exclude from normalization')
+    parser.add_argument('--n_vars_bool', type=int, default=0, help='number of boolean features')
+    parser.add_argument('--n_vars_num', type=int, default=0, help='number of numerical features')
+    parser.add_argument('--n_vars_time_features', type=int, default=0, help='number of time features')
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=10, help='data loader num workers')

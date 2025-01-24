@@ -25,8 +25,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return model
 
     def _get_data(self, flag):
-        data_set, data_loader, boolean_indices = data_provider(self.args, flag)
-        return data_set, data_loader, boolean_indices
+        data_set, data_loader, infos_dict = data_provider(self.args, flag)
+        return data_set, data_loader, infos_dict
 
     def _select_optimizer(self):
         model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
@@ -104,12 +104,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         n_params = self.count_parameters(self.model)
         print(f"Total trainable parameters: {n_params}")
         
-        train_data, train_loader, boolean_indices = self._get_data(flag='train')
-        vali_data, vali_loader, boolean_indices = self._get_data(flag='val')
-        test_data, test_loader, boolean_indices = self._get_data(flag='test')
+        train_data, train_loader, infos_dict = self._get_data(flag='train')
+        vali_data, vali_loader, _ = self._get_data(flag='val')
+        test_data, test_loader, _ = self._get_data(flag='test')
         
-        self.boolean_indices = boolean_indices
-        self.model.boolean_indices = boolean_indices
+        self.model.update_data_infos(infos_dict)
 
         path = os.path.join(self.args.checkpoints, setting)
         if not os.path.exists(path):
