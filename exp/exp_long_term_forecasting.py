@@ -12,7 +12,6 @@ import numpy as np
 
 warnings.filterwarnings('ignore')
 
-
 class Exp_Long_Term_Forecast(Exp_Basic):
     def __init__(self, args):
         super(Exp_Long_Term_Forecast, self).__init__(args)
@@ -220,9 +219,9 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             vali_loss = self.vali(vali_data, vali_loader, criterion)
             test_loss = self.vali(test_data, test_loader, criterion)
             
-            experiment.log_metric("epoch_train_loss", train_loss, step=epoch)
-            experiment.log_metric("epoch_vali_loss", vali_loss, step=epoch)
-            experiment.log_metric("epoch_test_loss", test_loss, step=epoch)
+            if self.args.log_to_comet: experiment.log_metric("epoch_train_loss", train_loss, step=epoch)
+            if self.args.log_to_comet: experiment.log_metric("epoch_vali_loss", vali_loss, step=epoch)
+            if self.args.log_to_comet: experiment.log_metric("epoch_test_loss", test_loss, step=epoch)
 
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
                 epoch + 1, train_steps, train_loss, vali_loss, test_loss))

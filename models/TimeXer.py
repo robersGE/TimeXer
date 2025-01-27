@@ -7,9 +7,8 @@ import numpy as np
 
 
 class FlattenHead(nn.Module):
-    def __init__(self, n_vars, nf, target_window, head_dropout=0):
+    def __init__(self, nf, target_window, head_dropout=0):
         super().__init__()
-        self.n_vars = n_vars
         self.flatten = nn.Flatten(start_dim=-2)
         self.linear = nn.Linear(nf, target_window)
         self.dropout = nn.Dropout(head_dropout)
@@ -21,17 +20,17 @@ class FlattenHead(nn.Module):
         return x
 
 class SimpleHead(nn.Module):
-    def __init__(self, d_model, target_window, head_dropout=0):
+    def __init__(self, nf, target_window, head_dropout=0):
         """
         A simpler version of FlattenHead that directly applies a linear transformation 
         to reduce dimensionality without explicit flattening.
         Args:
-            d_model (int): Dimension of the model.
+            nf (int): Dimension of the model.
             target_window (int): Prediction window size.
             head_dropout (float): Dropout rate for regularization.
         """
         super(SimpleHead, self).__init__()
-        self.projection = nn.Linear(d_model, target_window)
+        self.projection = nn.Linear(nf, target_window)
         self.dropout = nn.Dropout(head_dropout)
 
     def forward(self, x):  # x: [bs, nvars, patch_num, d_model]
@@ -176,8 +175,14 @@ class ConfigurableEncoderLayer(nn.Module):
                 x_glb = self.norm2(x_glb)
 
                 y = x = torch.cat([x[:, :-1, :], x_glb], dim=1)
-            else: 
-                y = x = x[:, :-1, :]
+            else:
+                # Global token creation without cross-attention
+                x_glb_ori = x[:, -1, :].unsqueeze(1)
+                # Example: Using mean pooling to create the global token
+                x_glb = torch.mean(x, dim=1, keepdim=True)  # Average pooling across the sequence
+                x_glb = self.norm2(x_glb)  # Normalize the global token
+
+                y = x = torch.cat([x[:, :-1, :], x_glb], dim=1)
         else:
             # Linear transformation block
             y = self.dropout(self.activation(self.linear1_1(x)))
@@ -360,10 +365,10 @@ class Model(nn.Module):
         self.encoder = ConfigurableEncoder(configs=configs, d_cross=configs.n_vars_num + configs.n_vars_time_features + 2)
         self.head_nf = configs.d_model * (self.patch_num + 1)
         if self.use_flatten_head:
-            self.head = FlattenHead(configs.enc_in, self.head_nf, configs.pred_len,
+            self.head = FlattenHead(self.head_nf, configs.pred_len,
                                 head_dropout=configs.dropout)
         else:
-            self.head = SimpleHead(configs.d_model, configs.pred_len, configs.dropout)
+            self.head = SimpleHead(self.head_nf, configs.pred_len, configs.dropout)
         
         self.initialize_weights()
         
