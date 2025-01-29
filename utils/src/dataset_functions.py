@@ -281,7 +281,7 @@ def export_to_csv(df, file_path):
         df['time'] = pd.to_datetime(df['time']).dt.strftime('%Y/%m/%d %H:%M')
 
     # Rename time to Date
-    df = df.rename(columns={'time': 'date'})
+    df = df.rename(columns={'time': 'Date'})
     
     # transform all bool columns to be floats
     for col in df.columns:

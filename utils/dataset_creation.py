@@ -2,7 +2,7 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from utils.src.dataset_functions import plot_time_series, adjust_weekend_load, smoothen, generate_temperature_profile, create_daily_scales, adjust_bool_day, export_to_csv
+from src.dataset_functions import plot_time_series, adjust_weekend_load, smoothen, generate_temperature_profile, create_daily_scales, adjust_bool_day, export_to_csv
 import yaml
 
 cfg_path = 'cfg/dataset.yaml'
@@ -51,9 +51,9 @@ load = base_load - 10 * df['temperature'] - 1. * df['solar_radiation'] + noise *
 df['load'] = adjust_weekend_load(load, df['time'], 12,24,10,22)
 if not drop_bool_day:   
     df['load'], bool_scales, bool_days = adjust_bool_day(df['load'], daily_scales_2, 16)
+    df['bool_day'] = bool_days
+
 df['load'] = smoothen(df, 'load', rolling_window=10)['load']
-df['bool_day'] = bool_days
 plot_time_series(df)
 #rename time column to Date
-df.rename(columns={'time': 'Date'}, inplace=True)
 export_to_csv(df, os.path.join('dataset', 'custom', f'{dataset_name}.csv'))
