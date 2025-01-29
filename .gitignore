@@ -175,3 +175,4 @@ cython_debug/
 cfg/secrets.yaml
 checkpoints/
 *.csv
+playgrounds/predicted_data/

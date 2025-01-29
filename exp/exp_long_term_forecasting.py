@@ -185,6 +185,21 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                     loss = criterion(outputs, batch_y)
                     train_loss.append(loss.item())
+                    
+                    # Save outputs and batch_y for post-processing
+                    outputs = outputs.detach().cpu()
+                    batch_y = batch_y.detach().cpu()
+                    batch_x = batch_x.detach().cpu()
+                    batch_x_mark = batch_x_mark.detach().cpu()
+                    import pickle
+                    with open('/home/robers/projects/TimeXer/playgrounds/predicted_data/outputs.pkl', 'wb') as f:
+                        pickle.dump(outputs, f)
+                    with open('/home/robers/projects/TimeXer/playgrounds/predicted_data/batch_y.pkl', 'wb') as f:
+                        pickle.dump(batch_y, f)
+                    with open('/home/robers/projects/TimeXer/playgrounds/predicted_data/batch_x.pkl', 'wb') as f:
+                        pickle.dump(batch_x, f)
+                    with open('/home/robers/projects/TimeXer/playgrounds/predicted_data/batch_x_mark.pkl', 'wb') as f:
+                        pickle.dump(batch_x_mark, f)
                 
                 if self.args.log_to_comet: experiment.log_metric("train_loss", loss.item(), step=epoch * train_steps + i)
 
