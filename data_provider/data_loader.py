@@ -227,7 +227,11 @@ class Dataset_Custom(Dataset):
         self.features = features
         self.target = target
         self.scale = scale
-        self.boolean_cols = boolean_cols
+        if self.args.use_boolean:
+            self.boolean_cols = boolean_cols
+        else:
+            self.boolean_cols = []
+            
         self.infos_dict = {}
         self.boolean_indices = []
         self.timeenc = timeenc
@@ -264,10 +268,6 @@ class Dataset_Custom(Dataset):
             df_data = df_raw[[self.target]]
 
         if self.scale:
-            # Ensure self.boolean_cols is not None
-            if self.boolean_cols is None:
-                self.boolean_cols = []
-
             # Separate boolean and non-boolean columns
             boolean_data = df_data[self.boolean_cols]
             non_boolean_cols = [col for col in df_data.columns if col not in self.boolean_cols]

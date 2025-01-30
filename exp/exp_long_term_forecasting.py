@@ -9,8 +9,52 @@ import os
 import time
 import warnings
 import numpy as np
+import torch.optim.lr_scheduler as lr_scheduler
+import pickle
+import re
 
 warnings.filterwarnings('ignore')
+
+def find_max_batch_size(model, dataloader, criterion, device, max_attempts=10):
+    """Find the largest batch size that fits into the GPU memory."""
+    batch_size = dataloader.batch_size
+    max_batch_size = batch_size
+    min_batch_size = 1  # Start from at least 1
+
+    for _ in range(max_attempts):
+        try:
+            batch_x, batch_y, batch_x_mark, batch_y_mark = next(iter(dataloader))
+
+            # Move to device
+            batch_x = batch_x.to(device).float()  # Ensure float32
+            batch_y = batch_y.to(device).float()
+            batch_x_mark = batch_x_mark.to(device).float()
+            batch_y_mark = batch_y_mark.to(device).float()
+
+
+            # Forward pass
+            model.train()
+            with torch.cuda.amp.autocast():  # If using mixed precision
+                outputs = model(batch_x, batch_x_mark, batch_y, batch_y_mark)
+                loss = criterion(outputs, batch_y)
+
+            loss.backward()
+            torch.cuda.empty_cache()
+            
+            # If successful, increase batch size
+            min_batch_size = batch_size
+            batch_size = (batch_size + max_batch_size) // 2
+        except RuntimeError as e:
+            if 'CUDA out of memory' in str(e):
+                print(f"Batch size {batch_size} too large, reducing...")
+                max_batch_size = batch_size
+                batch_size = (min_batch_size + max_batch_size) // 2
+                torch.cuda.empty_cache()
+            # else:
+            #     raise e
+
+    print(f"Optimal batch size found: {min_batch_size}")
+    return min_batch_size
 
 class Exp_Long_Term_Forecast(Exp_Basic):
     def __init__(self, args):
@@ -118,7 +162,9 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         model_optim = self._select_optimizer()
         criterion = self._select_criterion()
-
+        
+        scheduler = lr_scheduler.ReduceLROnPlateau(model_optim, mode='min', factor=0.5, patience=3, verbose=True)
+        
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
             
@@ -134,9 +180,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             start_epoch = checkpoint['epoch']
             start_iteration = checkpoint['iteration']
             print(f"Resuming from epoch {start_epoch}, iteration {start_iteration}")
+            
         except:
             print("No iteration checkpoint found, starting training from scratch")
         
+        time_start = time.time()
         time_now = time.time()
 
         # Loop over epochs
@@ -151,64 +199,40 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     continue  # Skip already completed iterations
                 iter_count += 1
                 model_optim.zero_grad()
-                batch_x = batch_x.float().to(self.device)
 
+                batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
                 batch_x_mark = batch_x_mark.float().to(self.device)
                 batch_y_mark = batch_y_mark.float().to(self.device)
 
-                # decoder input
-                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
-
                 # encoder - decoder
-                if self.args.use_amp:
-                    with torch.cuda.amp.autocast():
-                        if self.args.output_attention:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                        else:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-
-                        f_dim = -1 if self.args.features == 'MS' else 0
-                        outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                        batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                        loss = criterion(outputs, batch_y)
-                        train_loss.append(loss.item())
+                if self.args.output_attention:
+                    outputs = self.model(batch_x, batch_x_mark)[0]
                 else:
-                    if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                    else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                    outputs = self.model(batch_x, batch_x_mark)
 
-                    f_dim = -1 if self.args.features == 'MS' else 0
-                    outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                    loss = criterion(outputs, batch_y)
-                    train_loss.append(loss.item())
-                    
-                    # Save outputs and batch_y for post-processing
-                    outputs = outputs.detach().cpu()
-                    batch_y = batch_y.detach().cpu()
-                    batch_x = batch_x.detach().cpu()
-                    batch_x_mark = batch_x_mark.detach().cpu()
-                    import pickle
-                    with open('/home/robers/projects/TimeXer/playgrounds/predicted_data/outputs.pkl', 'wb') as f:
-                        pickle.dump(outputs, f)
-                    with open('/home/robers/projects/TimeXer/playgrounds/predicted_data/batch_y.pkl', 'wb') as f:
-                        pickle.dump(batch_y, f)
-                    with open('/home/robers/projects/TimeXer/playgrounds/predicted_data/batch_x.pkl', 'wb') as f:
-                        pickle.dump(batch_x, f)
-                    with open('/home/robers/projects/TimeXer/playgrounds/predicted_data/batch_x_mark.pkl', 'wb') as f:
-                        pickle.dump(batch_x_mark, f)
+                f_dim = -1 if self.args.features == 'MS' else 0
+                outputs = outputs[:, -self.args.pred_len:, f_dim:]
+                batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                loss = criterion(outputs, batch_y)
+                train_loss.append(loss.item())
+                
+                # Save outputs and batch_y for post-processing
+                outputs = outputs.detach().cpu()
+                batch_y = batch_y.detach().cpu()
+                batch_x = batch_x.detach().cpu()
+                batch_x_mark = batch_x_mark.detach().cpu()
                 
                 if self.args.log_to_comet: experiment.log_metric("train_loss", loss.item(), step=epoch * train_steps + i)
 
-                if (i + 1) % 10 == 0:
+                if time.time() - time_now >= self.args.log_interval:  # Check if at least 60 seconds have passed
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
                     speed = (time.time() - time_now) / iter_count
                     left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
                     print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
                     
+                    # GPU Monitoring
+                    os.system("nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv")
 
                     # Save full checkpoint
                     checkpoint_path = os.path.join(path, f'checkpoint_iter.pth')
@@ -220,6 +244,19 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         'args': vars(self.args),  # Optional metadata
                     }, checkpoint_path)
                     print(f"Checkpoint saved at iteration {i + 1}")
+                    
+                    with open('/mnt/data/robers/projects/TimeXer/playgrounds/predicted_data/outputs.pkl', 'wb') as f:
+                        pickle.dump(outputs, f)
+                    with open('/mnt/data/robers/projects/TimeXer/playgrounds/predicted_data/batch_y.pkl', 'wb') as f:
+                        pickle.dump(batch_y, f)
+                    with open('/mnt/data/robers/projects/TimeXer/playgrounds/predicted_data/batch_x.pkl', 'wb') as f:
+                        pickle.dump(batch_x, f)
+                    with open('/mnt/data/robers/projects/TimeXer/playgrounds/predicted_data/batch_x_mark.pkl', 'wb') as f:
+                        pickle.dump(batch_x_mark, f)
+
+                    # Reset time_now to prevent multiple triggers within the same minute
+                    time_now = time.time()
+
 
                 if self.args.use_amp:
                     scaler.scale(loss).backward()
@@ -231,32 +268,64 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
-            vali_loss = self.vali(vali_data, vali_loader, criterion)
-            test_loss = self.vali(test_data, test_loader, criterion)
+            # vali_loss = self.vali(vali_data, vali_loader, criterion)
+            # test_loss = self.vali(test_data, test_loader, criterion)
             
             if self.args.log_to_comet: experiment.log_metric("epoch_train_loss", train_loss, step=epoch)
-            if self.args.log_to_comet: experiment.log_metric("epoch_vali_loss", vali_loss, step=epoch)
-            if self.args.log_to_comet: experiment.log_metric("epoch_test_loss", test_loss, step=epoch)
+            # if self.args.log_to_comet: experiment.log_metric("epoch_vali_loss", vali_loss, step=epoch)
+            # if self.args.log_to_comet: experiment.log_metric("epoch_test_loss", test_loss, step=epoch)
+            
+            print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f}".format(epoch + 1, train_steps, train_loss))
 
-            print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
-                epoch + 1, train_steps, train_loss, vali_loss, test_loss))
-            early_stopping(vali_loss, self.model, path)
-            if early_stopping.early_stop:
-                print("Early stopping")
-                break
+            # print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
+            #     epoch + 1, train_steps, train_loss, vali_loss, test_loss))
+            
+            # early_stopping(vali_loss, self.model, path)
+            # if early_stopping.early_stop:
+            #     print("Early stopping")
+            #     break
 
-            adjust_learning_rate(model_optim, epoch + 1, self.args)
+            # adjust_learning_rate(model_optim, epoch + 1, self.args, scheduler, vali_loss)
+            adjust_learning_rate(model_optim, epoch + 1, self.args, scheduler, train_loss)
 
-        best_model_path = path + '/' + 'checkpoint.pth'
-        self.model.load_state_dict(torch.load(best_model_path))
+
+        # best_model_path = path + '/' + 'checkpoint.pth'
+        # self.model.load_state_dict(torch.load(best_model_path))
+        
+        # Save the final version of the model
+        final_path = os.path.join(self.args.checkpoints, setting, f'final_{time.strftime("%Y%m%d%H%M%S", time.localtime())}.pth')
+        torch.save({
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': model_optim.state_dict(),
+            'epoch': epoch,
+            'iteration': i + 1,
+            'args': vars(self.args),  # Optional metadata
+        }, final_path)
 
         return self.model
 
     def test(self, setting, test=0):
-        test_data, test_loader = self._get_data(flag='test')
+        test_data, test_loader, _ = self._get_data(flag='test')
         if test:
-            print('loading model')
-            self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
+            print('Looking for the most recent checkpoint...')
+            checkpoint_dir = os.path.join('./checkpoints', setting)
+
+            # Get all final_YYYYMMDDHHMMSS.pth files in the directory
+            checkpoint_files = [
+                f for f in os.listdir(checkpoint_dir) if re.match(r'final_\d{14}\.pth', f)
+            ]
+
+            if checkpoint_files:
+                # Sort by timestamp (extract from filename)
+                checkpoint_files.sort(reverse=True, key=lambda x: int(x.split('_')[1].split('.')[0]))
+                
+                # Load the most recent checkpoint
+                latest_checkpoint = os.path.join(checkpoint_dir, checkpoint_files[0])
+                print(f'Loading model from: {latest_checkpoint}')
+                checkpoint = torch.load(latest_checkpoint)
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+            else:
+                print("No valid checkpoint found, starting from scratch.")
 
         preds = []
         trues = []

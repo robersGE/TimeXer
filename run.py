@@ -162,6 +162,7 @@ if __name__ == '__main__':
     
     # Logging to comet ml
     parser.add_argument('--log_to_comet', type=bool, help='log to comet ml', default=False)
+    parser.add_argument('--log_interval', type=int, default=120, help='log interval')
 
     # Model simplification 
     

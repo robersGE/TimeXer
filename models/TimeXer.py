@@ -19,33 +19,6 @@ class FlattenHead(nn.Module):
         x = self.dropout(x)
         return x
 
-class SimpleHead(nn.Module):
-    def __init__(self, nf, target_window, head_dropout=0):
-        """
-        A simpler version of FlattenHead that directly applies a linear transformation 
-        to reduce dimensionality without explicit flattening.
-        Args:
-            nf (int): Dimension of the model.
-            target_window (int): Prediction window size.
-            head_dropout (float): Dropout rate for regularization.
-        """
-        super(SimpleHead, self).__init__()
-        self.projection = nn.Linear(nf, target_window)
-        self.dropout = nn.Dropout(head_dropout)
-
-    def forward(self, x):  # x: [bs, nvars, patch_num, d_model]
-        """
-        Args:
-            x (Tensor): Input tensor of shape [Batch, Variables, Patch, Features].
-        Returns:
-            Tensor: Output tensor of shape [Batch, Variables, Target_Window].
-        """
-        # Apply the projection along the feature dimension
-        x = self.projection(x)  # [bs, nvars, patch_num, target_window]
-        x = self.dropout(x)  # Add dropout
-        return x.mean(dim=2)  # Aggregate over patches: [bs, nvars, target_window]
-
-
 class EnEmbedding(nn.Module):
     def __init__(self, n_vars, d_model, patch_len, dropout):
         super(EnEmbedding, self).__init__()
@@ -71,25 +44,6 @@ class EnEmbedding(nn.Module):
         x = torch.cat([x, glb], dim=2)
         x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
         return self.dropout(x), n_vars
-
-
-class Encoder(nn.Module):
-    def __init__(self, layers, norm_layer=None, projection=None):
-        super(Encoder, self).__init__()
-        self.layers = nn.ModuleList(layers)
-        self.norm = norm_layer
-        self.projection = projection
-
-    def forward(self, x, cross, x_mask=None, cross_mask=None, tau=None, delta=None):
-        for layer in self.layers:
-            x = layer(x, cross, x_mask=x_mask, cross_mask=cross_mask, tau=tau, delta=delta)
-
-        if self.norm is not None:
-            x = self.norm(x)
-
-        if self.projection is not None:
-            x = self.projection(x)
-        return x
     
 class ConfigurableEncoderLayer(nn.Module):
     def __init__(self, use_attention, use_cross, self_attention, cross_attention, d_model, d_cross, d_ff=None,
@@ -189,19 +143,15 @@ class ConfigurableEncoderLayer(nn.Module):
 
             # Integrate `cross` tensor in the linear path
             cross_transformed = self.dropout(self.activation(self.linear1_2(cross)))  # Transform cross
-            print(f'cross shape: {cross_transformed.shape}')
-            print(f'x shape: {x.shape}')
             
             y = torch.cat([y, cross_transformed], dim=1)
 
             y = self.dropout(self.linear2(y))
             
-            print(f'y shape: {y.shape}')
             y = y.transpose(1, 2)
             
             y = self.linear_y(y)
             y = y.transpose(1, 2)
-            print(f'y shape: {y.shape}')
 
             x = self.norm1(x + y)
 
@@ -259,50 +209,6 @@ class ConfigurableEncoder(nn.Module):
             x = layer(x, cross, x_mask, cross_mask, tau, delta)
         return self.norm(x)
 
-class EncoderLayer(nn.Module):
-    def __init__(self, self_attention, cross_attention, d_model, d_ff=None,
-                 dropout=0.1, activation="relu"):
-        super(EncoderLayer, self).__init__()
-        d_ff = d_ff or 4 * d_model
-        self.self_attention = self_attention
-        self.cross_attention = cross_attention
-        self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
-        self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.norm3 = nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(dropout)
-        self.activation = F.relu if activation == "relu" else F.gelu
-
-    def forward(self, x, cross, x_mask=None, cross_mask=None, tau=None, delta=None):
-        B, L, D = cross.shape
-        x = x + self.dropout(self.self_attention(
-            x, x, x,
-            attn_mask=x_mask,
-            tau=tau, delta=None
-        )[0])
-        x = self.norm1(x)
-
-        x_glb_ori = x[:, -1, :].unsqueeze(1)
-        x_glb = torch.reshape(x_glb_ori, (B, -1, D))
-        x_glb_attn = self.dropout(self.cross_attention(
-            x_glb, cross, cross,
-            attn_mask=cross_mask,
-            tau=tau, delta=delta
-        )[0])
-        x_glb_attn = torch.reshape(x_glb_attn,
-                                   (x_glb_attn.shape[0] * x_glb_attn.shape[1], x_glb_attn.shape[2])).unsqueeze(1)
-        x_glb = x_glb_ori + x_glb_attn
-        x_glb = self.norm2(x_glb)
-
-        y = x = torch.cat([x[:, :-1, :], x_glb], dim=1)
-
-        y = self.dropout(self.activation(self.conv1(y.transpose(-1, 1))))
-        y = self.dropout(self.conv2(y).transpose(-1, 1))
-
-        return self.norm3(x + y)
-
-    
 class LearnableCombination(nn.Module):
     def __init__(self, d_model_bool, d_model_non_bool, d_model_final):
         super(LearnableCombination, self).__init__()
@@ -367,8 +273,6 @@ class Model(nn.Module):
         if self.use_flatten_head:
             self.head = FlattenHead(self.head_nf, configs.pred_len,
                                 head_dropout=configs.dropout)
-        else:
-            self.head = SimpleHead(self.head_nf, configs.pred_len, configs.dropout)
         
         self.initialize_weights()
         
@@ -394,7 +298,7 @@ class Model(nn.Module):
                 nn.init.constant_(m.weight, 1.0)  # Set LayerNorm weight to 1.0
 
             
-    def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec): 
+    def forecast(self, x_enc, x_mark_enc): 
         if self.use_boolean:
             x_enc_bool = x_enc[:, :, self.boolean_indices]  # Boolean features
 
@@ -445,42 +349,8 @@ class Model(nn.Module):
         return dec_out
 
 
-    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
-        if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
-            if self.features == 'M':
-                dec_out = self.forecast_multi(x_enc, x_mark_enc, x_dec, x_mark_dec)
-                return dec_out[:, -self.pred_len:, :]  # [B, L, D]
-            else:
-                dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
-                return dec_out[:, -self.pred_len:, :]  # [B, L, D]
-        else:
-            return None
+    def forward(self, x_enc, x_mark_enc, mask=None):
+        dec_out = self.forecast(x_enc, x_mark_enc)
+        return dec_out[:, -self.pred_len:, :]  # [B, L, D]
+
         
-    def forecast_multi(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
-        if self.use_norm:
-            # Normalization from Non-stationary Transformer
-            means = x_enc.mean(1, keepdim=True).detach()
-            x_enc = x_enc - means
-            stdev = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
-            x_enc /= stdev
-
-        _, _, N = x_enc.shape
-
-        en_embed, n_vars = self.en_embedding(x_enc.permute(0, 2, 1))
-        ex_embed = self.ex_embedding(x_enc, x_mark_enc)
-
-        enc_out = self.encoder(en_embed, ex_embed)
-        enc_out = torch.reshape(
-            enc_out, (-1, n_vars, enc_out.shape[-2], enc_out.shape[-1]))
-        # z: [bs x nvars x d_model x patch_num]
-        enc_out = enc_out.permute(0, 1, 3, 2)
-
-        dec_out = self.head(enc_out)  # z: [bs x nvars x target_window]
-        dec_out = dec_out.permute(0, 2, 1)
-
-        if self.use_norm:
-            # De-Normalization from Non-stationary Transformer
-            dec_out = dec_out * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
-            dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
-
-        return dec_out

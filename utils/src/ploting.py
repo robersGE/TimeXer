@@ -6,7 +6,7 @@ from matplotlib import cm
 def plot_data(batch_x_og, batch_y, batch_x_mark, outputs, idx): 
     batch_x_shape = batch_x_og.shape
     # Extract the relevant data for the given index
-    batch_x = batch_x_og[idx, :, 3]
+    batch_x = batch_x_og[idx, :, -1]
     batch_y = batch_y[idx]
     batch_x_mark = batch_x_mark[idx]
     outputs = outputs[idx]

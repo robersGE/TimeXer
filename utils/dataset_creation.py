@@ -57,3 +57,4 @@ df['load'] = smoothen(df, 'load', rolling_window=10)['load']
 plot_time_series(df)
 #rename time column to Date
 export_to_csv(df, os.path.join('dataset', 'custom', f'{dataset_name}.csv'))
+print(f"Dataset saved to {os.path.join('dataset', 'custom', f'{dataset_name}.csv')}")
