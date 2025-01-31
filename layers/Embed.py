@@ -156,7 +156,6 @@ class BooleanEmbedding(nn.Module):
             raise ValueError("Input tensor contains NaN values. Please check your data.")
     
         x = x.permute(0, 2, 1)  # Convert to [Batch, Variate, Time]
-        print(x.shape)
         x = self.value_embedding(x)  # Apply linear transformation
         return self.dropout(x)
 

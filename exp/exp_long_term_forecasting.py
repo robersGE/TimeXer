@@ -108,22 +108,22 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                 batch_x_mark = batch_x_mark.float().to(self.device)
                 batch_y_mark = batch_y_mark.float().to(self.device)
+                
+                batch_forecast = batch_y[:, self.args.label_len:, :-1].to(self.device)
+                batch_forecast_mark = batch_y_mark[:, self.args.label_len:, :].to(self.device)
 
-                # decoder input
-                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if self.args.output_attention:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                            outputs = self.model(batch_x, batch_x_mark, batch_forecast, batch_forecast_mark)[0]
                         else:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                            outputs = self.model(batch_x, batch_x_mark, batch_forecast, batch_forecast_mark)
                 else:
                     if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        outputs = self.model(batch_x, batch_x_mark, batch_forecast, batch_forecast_mark)[0]
                     else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        outputs = self.model(batch_x, batch_x_mark, batch_forecast, batch_forecast_mark)
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
@@ -163,7 +163,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         model_optim = self._select_optimizer()
         criterion = self._select_criterion()
         
-        scheduler = lr_scheduler.ReduceLROnPlateau(model_optim, mode='min', factor=0.5, patience=3, verbose=True)
+        scheduler = lr_scheduler.ReduceLROnPlateau(model_optim, mode='min', factor=0.8, patience=4, verbose=True)
         
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
@@ -176,9 +176,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         try:
             checkpoint = torch.load(os.path.join(path, 'checkpoint_iter.pth'))
             self.model.load_state_dict(checkpoint['model_state_dict'])
-            model_optim.load_state_dict(checkpoint['optimizer_state_dict'])
-            start_epoch = checkpoint['epoch']
-            start_iteration = checkpoint['iteration']
+            if self.args.load_optimizer:
+                model_optim.load_state_dict(checkpoint['optimizer_state_dict'])
+                start_epoch = checkpoint['epoch']
+                start_iteration = checkpoint['iteration']
             print(f"Resuming from epoch {start_epoch}, iteration {start_iteration}")
             
         except:
@@ -204,12 +205,15 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 batch_y = batch_y.float().to(self.device)
                 batch_x_mark = batch_x_mark.float().to(self.device)
                 batch_y_mark = batch_y_mark.float().to(self.device)
+                
+                batch_forecast = batch_y[:, self.args.label_len:, :-1].to(self.device)
+                batch_forecast_mark = batch_y_mark[:, self.args.label_len:, :].to(self.device)
 
                 # encoder - decoder
                 if self.args.output_attention:
-                    outputs = self.model(batch_x, batch_x_mark)[0]
+                    outputs = self.model(batch_x, batch_x_mark, batch_forecast, batch_forecast_mark)[0]
                 else:
-                    outputs = self.model(batch_x, batch_x_mark)
+                    outputs = self.model(batch_x, batch_x_mark, batch_forecast, batch_forecast_mark)
 
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
@@ -268,11 +272,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
-            # vali_loss = self.vali(vali_data, vali_loader, criterion)
+            vali_loss = self.vali(vali_data, vali_loader, criterion)
             # test_loss = self.vali(test_data, test_loader, criterion)
             
             if self.args.log_to_comet: experiment.log_metric("epoch_train_loss", train_loss, step=epoch)
-            # if self.args.log_to_comet: experiment.log_metric("epoch_vali_loss", vali_loss, step=epoch)
+            if self.args.log_to_comet: experiment.log_metric("epoch_vali_loss", vali_loss, step=epoch)
             # if self.args.log_to_comet: experiment.log_metric("epoch_test_loss", test_loss, step=epoch)
             
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f}".format(epoch + 1, train_steps, train_loss))
@@ -285,8 +289,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             #     print("Early stopping")
             #     break
 
-            # adjust_learning_rate(model_optim, epoch + 1, self.args, scheduler, vali_loss)
-            adjust_learning_rate(model_optim, epoch + 1, self.args, scheduler, train_loss)
+            adjust_learning_rate(model_optim, epoch + 1, self.args, scheduler, vali_loss)
+            # adjust_learning_rate(model_optim, epoch + 1, self.args, scheduler, train_loss)
 
 
         # best_model_path = path + '/' + 'checkpoint.pth'
@@ -341,23 +345,23 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                 batch_x_mark = batch_x_mark.float().to(self.device)
                 batch_y_mark = batch_y_mark.float().to(self.device)
+                
+                batch_forecast = batch_y[:, self.args.label_len:, :-1].to(self.device)
+                batch_forecast_mark = batch_y_mark[:, self.args.label_len:, :].to(self.device)
 
-                # decoder input
-                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if self.args.output_attention:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                            outputs = self.model(batch_x, batch_x_mark, batch_forecast, batch_forecast_mark)[0]
                         else:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                            outputs = self.model(batch_x, batch_x_mark, batch_forecast, batch_forecast_mark)
                 else:
                     if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        outputs = self.model(batch_x, batch_x_mark, batch_forecast, batch_forecast_mark)[0]
 
                     else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        outputs = self.model(batch_x, batch_x_mark, batch_forecast, batch_forecast_mark)
 
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, :]
