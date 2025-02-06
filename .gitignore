@@ -137,6 +137,7 @@ env.bak/
 venv.bak/
 venv_TimeXer/
 venv_timeXer/
+TimeXer_venv/
 # Spyder project settings
 .spyderproject
 .spyproject
