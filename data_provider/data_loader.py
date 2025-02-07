@@ -207,7 +207,7 @@ class Dataset_ETT_minute(Dataset):
 class Dataset_Custom(Dataset):
     def __init__(self, args, root_path, flag='train', size=None,
                  features='S', data_path='ETTh1.csv',
-                 target='OT', scale=True, timeenc=0, freq='h', seasonal_patterns=None, boolean_cols=[]):
+                 target='OT', scale=True, timeenc=0, freq='h', seasonal_patterns=None, boolean_cols=[], drop_cols=[]):
         # size [seq_len, label_len, pred_len]
         self.args = args
         # info
@@ -231,11 +231,14 @@ class Dataset_Custom(Dataset):
             self.boolean_cols = boolean_cols
         else:
             self.boolean_cols = []
+        self.drop_cols = drop_cols
             
         self.infos_dict = {}
         self.boolean_indices = []
         self.timeenc = timeenc
         self.freq = freq
+        
+        self.non_boolean_cols = []
 
         self.root_path = root_path
         self.data_path = data_path
@@ -252,6 +255,8 @@ class Dataset_Custom(Dataset):
         cols = list(df_raw.columns)
         cols.remove(self.target)
         cols.remove('date')
+        cols = [col for col in cols if col not in self.drop_cols]
+        
         df_raw = df_raw[['date'] + cols + [self.target]]
         num_train = int(len(df_raw) * 0.7)
         num_test = int(len(df_raw) * 0.2)
@@ -270,22 +275,24 @@ class Dataset_Custom(Dataset):
         if self.scale:
             # Separate boolean and non-boolean columns
             boolean_data = df_data[self.boolean_cols]
-            non_boolean_cols = [col for col in df_data.columns if col not in self.boolean_cols]
-            train_data = df_data[non_boolean_cols][border1s[0]:border2s[0]]
+            self.non_boolean_cols = [col for col in df_data.columns if col not in self.boolean_cols]
+            train_data = df_data[self.non_boolean_cols][border1s[0]:border2s[0]]
 
             # Fit the scaler on the non-boolean columns
             self.scaler.fit(train_data.values)
             
             # Scale only the non-boolean columns
-            scaled_data = self.scaler.transform(df_data[non_boolean_cols].values)
-            scaled_df = pd.DataFrame(scaled_data, columns=non_boolean_cols, index=df_data.index)
+            scaled_data = self.scaler.transform(df_data[self.non_boolean_cols].values)
+            scaled_df = pd.DataFrame(scaled_data, columns=self.non_boolean_cols, index=df_data.index)
             
             # Combine scaled non-boolean columns with boolean columns
             data = pd.concat([scaled_df, boolean_data], axis=1)[df_data.columns].values
 
-            self.infos_dict['boolean_indices'] = [df_data.columns.get_loc(col) for col in self.boolean_cols]
         else:
             data = df_data.values
+        
+        self.infos_dict['boolean_indices'] = [df_data.columns.get_loc(col) for col in self.boolean_cols]
+        self.infos_dict['non_boolean_indices'] = [df_data.columns.get_loc(col) for col in self.non_boolean_cols]
 
         df_stamp = df_raw[['date']][border1:border2]
         df_stamp['date'] = pd.to_datetime(df_stamp.date)
@@ -325,7 +332,7 @@ class Dataset_Custom(Dataset):
         return len(self.data_x) - self.seq_len - self.pred_len + 1
 
     def inverse_transform(self, data):
-        return self.scaler.inverse_transform(data)
+        return self.scaler.inverse_transform(data[:, self.infos_dict['non_boolean_indices']])
 
 
 class Dataset_M4(Dataset):

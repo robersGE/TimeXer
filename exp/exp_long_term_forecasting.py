@@ -1,3 +1,4 @@
+import glob
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
 from utils.tools import EarlyStopping, adjust_learning_rate, visual
@@ -147,11 +148,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         n_params = self.count_parameters(self.model)
         print(f"Total trainable parameters: {n_params}")
         
-        train_data, train_loader, infos_dict = self._get_data(flag='train')
+        train_data, train_loader, self.infos_dict = self._get_data(flag='train')
         vali_data, vali_loader, _ = self._get_data(flag='val')
         test_data, test_loader, _ = self._get_data(flag='test')
         
-        self.model.update_data_infos(infos_dict)
+        self.model.update_data_infos(self.infos_dict)
 
         path = os.path.join(self.args.checkpoints, setting)
         if not os.path.exists(path):
@@ -175,8 +176,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         # Try to load a full checkpoint if available
         try:
             checkpoint = torch.load(os.path.join(path, 'checkpoint_iter.pth'))
-            self.model.load_state_dict(checkpoint['model_state_dict'])
             if self.args.load_optimizer:
+                self.model.load_state_dict(checkpoint['model_state_dict'])
                 model_optim.load_state_dict(checkpoint['optimizer_state_dict'])
                 start_epoch = checkpoint['epoch']
                 start_iteration = checkpoint['iteration']
@@ -311,25 +312,24 @@ class Exp_Long_Term_Forecast(Exp_Basic):
     def test(self, setting, test=0):
         test_data, test_loader, _ = self._get_data(flag='test')
         if test:
-            print('Looking for the most recent checkpoint...')
-            checkpoint_dir = os.path.join('./checkpoints', setting)
+            print('loading model')
+            checkpoints_path = os.path.join(self.args.checkpoints, setting)  # Root should match where models are saved
 
-            # Get all final_YYYYMMDDHHMMSS.pth files in the directory
-            checkpoint_files = [
-                f for f in os.listdir(checkpoint_dir) if re.match(r'final_\d{14}\.pth', f)
-            ]
+            # Find all saved model files matching the pattern
+            model_files = glob.glob(os.path.join(checkpoints_path, "final_*.pth"))
 
-            if checkpoint_files:
-                # Sort by timestamp (extract from filename)
-                checkpoint_files.sort(reverse=True, key=lambda x: int(x.split('_')[1].split('.')[0]))
-                
-                # Load the most recent checkpoint
-                latest_checkpoint = os.path.join(checkpoint_dir, checkpoint_files[0])
-                print(f'Loading model from: {latest_checkpoint}')
-                checkpoint = torch.load(latest_checkpoint)
-                self.model.load_state_dict(checkpoint['model_state_dict'])
-            else:
-                print("No valid checkpoint found, starting from scratch.")
+            if not model_files:
+                raise FileNotFoundError("No saved model checkpoints found!")
+
+            # Get the latest model by sorting based on timestamp in filename
+            latest_model = max(model_files, key=os.path.getctime)
+
+            print(f"Loading model from: {latest_model}")
+
+            # Load the checkpoint
+            checkpoint = torch.load(latest_model, map_location=torch.device("cpu"))  # Load on CPU or modify for GPU
+
+            self.model.load_state_dict(checkpoint["model_state_dict"])
 
         preds = []
         trues = []
@@ -372,8 +372,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     shape = batch_y.shape
                     if self.args.features == 'MS':
                         outputs = np.tile(outputs, [1, 1, batch_y.shape[-1]])
-                    outputs = test_data.inverse_transform(outputs.reshape(shape[0] * shape[1], -1)).reshape(shape)
-                    batch_y = test_data.inverse_transform(batch_y.reshape(shape[0] * shape[1], -1)).reshape(shape)
+                    outputs = test_data.inverse_transform(outputs.reshape(shape[0] * shape[1], -1)).reshape(shape[0], shape[1], -1)
+                    batch_y = test_data.inverse_transform(batch_y.reshape(shape[0] * shape[1], -1)).reshape(shape[0], shape[1], -1)
         
                 outputs = outputs[:, :, f_dim:]
                 batch_y = batch_y[:, :, f_dim:]
@@ -387,7 +387,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     input = batch_x.detach().cpu().numpy()
                     if test_data.scale and self.args.inverse:
                         shape = input.shape
-                        input = test_data.inverse_transform(input.reshape(shape[0] * shape[1], -1)).reshape(shape)
+                        input = test_data.inverse_transform(input.reshape(shape[0] * shape[1], -1)).reshape(shape[0], shape[1], -1)
                     gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
                     pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
                     visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))

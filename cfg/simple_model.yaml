@@ -1,22 +1,25 @@
 task_name: long_term_forecast
-root_path: ./dataset/custom/
-data_path: dataset-h_43800-n_0.9-b_False.csv
+root_path: ./dataset/real_data/
+# data_path: dataset-h_43800-n_0.9-b_False.csv
+data_path: combined_data.csv
 model: TimeXer
 features: MS
-target: load
+scaling: True
+inverse: True
+target: gb
 seq_len: 36
 label_len: 12
 pred_len: 24
 d_model: 512
-n_heads: 1
+n_heads: 4
 e_layers: 5
 d_ff: 512
-n_vars_bool: 1
-n_vars_num: 3
+n_vars_bool: 8
+n_vars_num: 4
 n_vars_time_features: 4
 dropout: 0.0
 use_norm: 0
-train_epochs: 30
+train_epochs: 3
 load_optimizer: False
 batch_size: 256
 freq: h
@@ -28,4 +31,15 @@ use_cross: True
 log_to_comet: True
 log_interval: 120
 boolean_cols:
-  - 'bool_day'
+  - "FR: FrVF"
+  - "FR: SoF"
+  - "FR: MoNF"
+  - "FR: Brückentag"
+  - "FR: Do-Shopping"
+  - "FR: Feiertag"
+  - "FR: Ferien-Firmen"
+  - "FR: Ferien"
+  - "Winterzeit"
+drop_cols: 
+  - "gct"
+  - "sisyphe_v1.3_da_gb_mos"

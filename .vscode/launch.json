@@ -7,7 +7,7 @@
         "request": "launch",
         "program": "${workspaceFolder}/run.py",
         "args": [
-          "--is_training", "1",
+          "--is_training", "0",
           "--task_name", "long_term_forecast",
           "--root_path", "./dataset/EPF/",
           "--root_path", "./dataset/custom/",
@@ -46,7 +46,7 @@
         "request": "launch",
         "program": "${workspaceFolder}/run.py",
         "args": [
-          "--is_training", "1",
+          "--is_training", "0",
           "--task_name", "long_term_forecast",
           "--model_id", "NP_168_24",
           "--model", "TimeXer",

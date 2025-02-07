@@ -105,6 +105,7 @@ if __name__ == '__main__':
     parser.add_argument('--n_vars_bool', type=int, default=0, help='number of boolean features')
     parser.add_argument('--n_vars_num', type=int, default=0, help='number of numerical features')
     parser.add_argument('--n_vars_time_features', type=int, default=0, help='number of time features')
+    parser.add_argument('--drop_cols', type=parse_boolean_cols, default=[], help='columns to drop')
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=10, help='data loader num workers')
